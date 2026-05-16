@@ -1,6 +1,6 @@
 workflows:
   android-build:
-    name: Native Android APK Build
+    name: Native Android APK Build with Auto-Updates
     max_build_duration: 30
     environment:
       groups:
@@ -12,14 +12,19 @@ workflows:
           cordova create localmind_app com.localmind.ai LocalMind
           cd localmind_app
           cordova platform add android --save
-      - name: Inject Project Code Assets
+          # Inject hot-reload auto-update capabilities
+          cordova plugin add cordova-plugin-code-push@latest
+      - name: Inject Project Code Assets & Config
         script: |
           cd localmind_app
           rm -rf www/*
           # Copy your repository contents into the native webview folder
           cp ../index-2.html www/index.html
-          # Fallback check if index-2 isn't the primary file name
           if [ ! -f www/index.html ]; then cp ../index.html www/index.html; fi
+          
+          # Tell the APK to look at your GitHub Pages site for future instant updates
+          # REPLACE 'YOUR_GITHUB_USERNAME' AND 'YOUR_REPO_NAME' BELOW WITH YOUR ACTUAL GITHUB DETAILS
+          echo '{"content_url": "https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPO_NAME/"}' > www/chcp.json
       - name: Compile Android Debug APK
         script: |
           cd localmind_app
