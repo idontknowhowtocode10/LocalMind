@@ -242,7 +242,7 @@
 </div>
 
 <script type="module">
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3';
+import { pipeline, env, TextStreamer } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3';
 
 const localforage = (await import('https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.esm.min.js').catch(() => null))
   ?? await new Promise(res => {
@@ -273,7 +273,7 @@ const userInput = $('user-input');
 const btnSend   = $('btn-send');
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let pipe = null, tokenizer = null;
+let pipe = null;
 let generating = false;
 let chats = {};        // { id: { id, title, messages[] } }
 let activeChatId = null;
@@ -329,10 +329,9 @@ async function loadModel(modelId) {
   try {
     pipe = await pipeline('text-generation', modelId, {
       device: 'webgpu',
-      dtype: modelId.includes('q4') ? 'q4' : 'q4',
+      dtype: 'q4',
       progress_callback: onProgress,
     });
-    tokenizer = pipe.tokenizer;
     progBar.style.width = '100%';
     setTimeout(() => progBar.style.width = '0%', 800);
     setStatus('ready');
@@ -345,7 +344,6 @@ async function loadModel(modelId) {
         device: 'wasm',
         progress_callback: onProgress,
       });
-      tokenizer = pipe.tokenizer;
       progBar.style.width = '100%';
       setTimeout(() => progBar.style.width = '0%', 800);
       setStatus('ready');
@@ -464,15 +462,6 @@ async function generate(prompt) {
   appendBubble('user', prompt);
   renderChatList();
 
-  let inputText;
-  try {
-    inputText = tokenizer.apply_chat_template
-      ? tokenizer.apply_chat_template(chat.messages, { tokenize: false, add_generation_prompt: true })
-      : chat.messages.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n') + '\nAssistant:';
-  } catch (_) {
-    inputText = chat.messages.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n') + '\nAssistant:';
-  }
-
   const aiBub = appendBubble('assistant', '', true);
   let outputText = '';
   let tokenCount = 0;
@@ -481,16 +470,12 @@ async function generate(prompt) {
   addLog('Generation started…', 'info');
 
   try {
-    await pipe(inputText, {
-      max_new_tokens: 512,
-      do_sample: true,
-      temperature: 0.7,
-      top_p: 0.9,
-      repetition_penalty: 1.1,
-      callback_function: token => {
+    const streamer = new TextStreamer(pipe.tokenizer, {
+      skip_prompt: true,
+      skip_special_tokens: true,
+      callback_function: (text) => {
         tokenCount++;
-        outputText += token;
-        // strip cursor, update text
+        outputText += text;
         aiBub.childNodes.forEach(n => { if (n.className === 'cursor') n.remove(); });
         aiBub.textContent = outputText;
         const cur = document.createElement('span');
@@ -499,12 +484,27 @@ async function generate(prompt) {
         messages.scrollTop = messages.scrollHeight;
       }
     });
+    const result = await pipe(chat.messages, {
+      max_new_tokens: 512,
+      do_sample: true,
+      temperature: 0.7,
+      top_p: 0.9,
+      repetition_penalty: 1.1,
+      streamer,
+    });
+    if (!outputText) {
+      const raw = result?.[0]?.generated_text;
+      if (Array.isArray(raw)) outputText = raw.at(-1)?.content ?? '';
+      else if (typeof raw === 'string') {
+        const parts = raw.split(/\<\|assistant\|\>|assistant\n/i);
+        outputText = (parts.length > 1 ? parts.pop() : raw).trim();
+      }
+    }
   } catch (err) {
     addLog(`Generation error: ${err.message}`, 'error');
     outputText = outputText || '[Error during generation]';
   }
 
-  // finalize
   aiBub.childNodes.forEach(n => { if (n.className === 'cursor') n.remove(); });
   aiBub.textContent = outputText.trim();
 
