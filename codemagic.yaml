@@ -6,13 +6,23 @@ workflows:
       groups:
         - None
     scripts:
-      - name: Install Node Modules
-        script: npm install
-      - name: Generate Android Project Shell
-        script: npx @react-native-community/cli@latest init LocalMind --skip-install
+      - name: Initialize Web-to-APK Workspace
+        script: |
+          npm install -g cordova
+          cordova create localmind_app com.localmind.ai LocalMind
+          cd localmind_app
+          cordova platform add android --save
+      - name: Inject Project Code Assets
+        script: |
+          cd localmind_app
+          rm -rf www/*
+          # Copy your repository contents into the native webview folder
+          cp ../index-2.html www/index.html
+          # Fallback check if index-2 isn't the primary file name
+          if [ ! -f www/index.html ]; then cp ../index.html www/index.html; fi
       - name: Compile Android Debug APK
         script: |
-          cd LocalMind/android
-          ./gradlew assembleDebug
+          cd localmind_app
+          cordova build android --debug --device
     artifacts:
-      - LocalMind/android/app/build/outputs/apk/debug/*.apk
+      - localmind_app/platforms/android/app/build/outputs/apk/debug/*.apk
