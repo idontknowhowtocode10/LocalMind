@@ -1,6 +1,6 @@
 workflows:
   android-build:
-    name: Native Android APK Build with Auto-Updates
+    name: Native Android APK Build with Live Sync
     max_build_duration: 30
     environment:
       groups:
@@ -12,19 +12,32 @@ workflows:
           cordova create localmind_app com.localmind.ai LocalMind
           cd localmind_app
           cordova platform add android --save
-          # Inject hot-reload auto-update capabilities
-          cordova plugin add cordova-plugin-code-push@latest
-      - name: Inject Project Code Assets & Config
+      - name: Inject Live Sync Code Gateway
         script: |
           cd localmind_app
           rm -rf www/*
-          # Copy your repository contents into the native webview folder
-          cp ../index-2.html www/index.html
-          if [ ! -f www/index.html ]; then cp ../index.html www/index.html; fi
           
-          # Tell the APK to look at your GitHub Pages site for future instant updates
-          # REPLACE 'YOUR_GITHUB_USERNAME' AND 'YOUR_REPO_NAME' BELOW WITH YOUR ACTUAL GITHUB DETAILS
-          echo '{"content_url": "https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPO_NAME/"}' > www/chcp.json
+          # REPLACE 'YOUR_GITHUB_USERNAME' AND 'YOUR_REPO_NAME' WITH YOUR ACTUAL GITHUB DETAILS BELOW:
+          EXT_URL="https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPO_NAME/"
+          
+          # Creates a robust native browser gateway container
+          cat <<EOF > www/index.html
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="initial-scale=1, width=device-width, viewport-fit=cover">
+              <title>LocalMind Launcher</title>
+              <style>
+                  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #0a0a0f; }
+                  iframe { border: none; width: 100%; height: 100%; }
+              </style>
+          </head>
+          <body>
+              <iframe src="${EXT_URL}"></iframe>
+          </body>
+          </html>
+          EOF
       - name: Compile Android Debug APK
         script: |
           cd localmind_app
