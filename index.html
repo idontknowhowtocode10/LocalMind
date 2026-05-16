@@ -581,42 +581,35 @@ async function loadModel(modelId) {
     addLog('Previous pipeline released');
   }
 
-  // WebGPU check — skip entirely if unavailable (prevents silent hang on Android)
+  // Check WebGPU availability — don't try if absent (saves crash on Android)
   const hasWebGPU = !!navigator.gpu;
-  if (!hasWebGPU) addLog('WebGPU unavailable — WASM only','info');
-
-  // CRITICAL: always specify dtype for WASM. null/undefined = fp32 = ~2 GB = Android OOM crash.
-  // q4 ≈ 250 MB, q8 ≈ 500 MB — both fit in Android WebView's memory budget.
   const devicePlan = hasWebGPU
-    ? [['webgpu','q4'], ['wasm','q4'], ['wasm','q8']]
-    : [['wasm','q4'], ['wasm','q8']];
+    ? [['webgpu','q4'], ['wasm', null]]
+    : [['wasm', null]];
+  if (!hasWebGPU) addLog('WebGPU unavailable — using WASM','info');
 
   const opts = { progress_callback: onProgress };
-  let loaded = false;
 
   for (const [device, dtype] of devicePlan) {
     try {
-      addLog(`Trying ${device}/${dtype}…`,'info');
-      pipe = await pipeline('text-generation', modelId, {...opts, device, dtype});
+      pipe = await pipeline('text-generation', modelId,
+        dtype ? {...opts, device, dtype} : {...opts, device});
       progBar.style.width='100%';
       setTimeout(()=>progBar.style.width='0%', 600);
       setStatus('ready');
-      addLog(`Ready (${device}/${dtype}): ${modelId}`,'success');
+      addLog(`Ready (${device}): ${modelId}`,'success');
       if (!generating) btnSend.disabled = false;
       vibrate([10, 50, 10]);
-      loaded = true;
       break;
     } catch(err) {
-      addLog(`${device}/${dtype} failed: ${err.message}`,'warn');
+      addLog(`${device} failed: ${err.message}`,'warn');
       pipe = null;
+      if (device==='wasm') {
+        setStatus('error');
+        addLog('Could not load model — try a smaller one','error');
+        await showAlert('Load Failed', `Could not load "${modelId}". Try a smaller model.`);
+      }
     }
-  }
-
-  if (!loaded) {
-    setStatus('error');
-    addLog('All load attempts failed — try a smaller model','error');
-    await showAlert('Load Failed',
-      `Could not load this model on your device.\n\nTry SmolLM2 135M or 360M — they use far less memory.`);
   }
   loadingModel = false;
 }
