@@ -4,8 +4,9 @@ workflows:
     max_build_duration: 30
     instance_type: linux_x2
     environment:
-      android_ndk: 25.2.9519653
-      android_sdk: 33
+      groups:
+        - None
+      # The SDK and NDK versions must be nested under vars or defaults depending on configuration
     scripts:
       - name: Install Node Modules
         script: npm install
@@ -13,7 +14,7 @@ workflows:
         script: npx react-native@latest init LocalMind --directory android --skip-install
       - name: Compile Android Debug APK
         script: |
-          cd android/android
+          cd android
           ./gradlew assembleDebug
     artifacts:
-      - android/android/app/build/outputs/apk/debug/*.apk
+      - android/app/build/outputs/apk/debug/*.apk
