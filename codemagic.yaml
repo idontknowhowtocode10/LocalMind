@@ -18,7 +18,7 @@ workflows:
           rm -rf www/*
           
           # REPLACE 'YOUR_GITHUB_USERNAME' AND 'YOUR_REPO_NAME' WITH YOUR ACTUAL GITHUB DETAILS BELOW:
-          EXT_URL="https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPO_NAME/"
+          EXT_URL="https://idontknowhowtocode10.github.io/LocalMind/"
           
           # Creates a robust native browser gateway container
           cat <<EOF > www/index.html
