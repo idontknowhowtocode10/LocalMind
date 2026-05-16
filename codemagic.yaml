@@ -2,11 +2,10 @@ workflows:
   android-build:
     name: Native Android APK Build
     max_build_duration: 30
-    instance_type: linux_x2
+    # No instance_type declared = Codemagic defaults to the free standard machine
     environment:
       groups:
         - None
-      # The SDK and NDK versions must be nested under vars or defaults depending on configuration
     scripts:
       - name: Install Node Modules
         script: npm install
