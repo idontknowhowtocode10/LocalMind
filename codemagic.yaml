@@ -2,7 +2,6 @@ workflows:
   android-build:
     name: Native Android APK Build
     max_build_duration: 30
-    # No instance_type declared = Codemagic defaults to the free standard machine
     environment:
       groups:
         - None
@@ -10,7 +9,7 @@ workflows:
       - name: Install Node Modules
         script: npm install
       - name: Generate Android Project Shell
-        script: npx react-native@latest init LocalMind --directory android --skip-install
+        script: npx @react-native-community/cli init LocalMind --directory android --skip-install
       - name: Compile Android Debug APK
         script: |
           cd android
