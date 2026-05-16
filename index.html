@@ -202,9 +202,9 @@
     <button id="btn-sidebar-toggle" style="display:flex">☰</button>
     <div id="model-select-wrap">
       <select id="model-select">
-        <option value="onnx-community/SmolLM2-135M-Instruct-ONNX">SmolLM2 135M — Fastest / Ultra-light</option>
+        <option value="onnx-community/SmolLM2-135M-Instruct-ONNX" selected>SmolLM2 135M — Fastest / Ultra-light</option>
         <option value="onnx-community/SmolLM2-360M-Instruct-ONNX">SmolLM2 360M — Balanced / Light</option>
-        <option value="onnx-community/Qwen2.5-0.5B-Instruct-ONNX" selected>Qwen 2.5 0.5B — Smart / Medium</option>
+        <option value="onnx-community/Qwen2.5-0.5B-Instruct-ONNX">Qwen 2.5 0.5B — Smart / Medium</option>
         <option value="onnx-community/Llama-3.2-1B-Instruct-q4f16">Llama 3.2 1B — Heavy / Most Capable</option>
       </select>
     </div>
@@ -241,330 +241,267 @@
   </div>
 </div>
 
+<script>
+  // Load localforage via classic script tag — most reliable cross-origin approach
+  (function(){ const s=document.createElement('script'); s.src='https://cdn.jsdelivr.net/npm/localforage@1.10.0/dist/localforage.min.js'; document.head.appendChild(s); })();
+</script>
 <script type="module">
 import { pipeline, env, TextStreamer } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3';
 
-const localforage = (await import('https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.esm.min.js').catch(() => null))
-  ?? await new Promise(res => {
-    const s = document.createElement('script');
-    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js';
-    s.onload = () => res(window.localforage);
-    document.head.appendChild(s);
-  });
-
 env.allowLocalModels = false;
+env.useBrowserCache  = true;
 
-// ── DOM refs ──────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
-const sidebar   = $('sidebar');
-const overlay   = $('overlay');
-const btnToggle = $('btn-sidebar-toggle');
-const btnNew    = $('btn-new-chat');
-const chatList  = $('chat-list');
-const modelSel  = $('model-select');
-const statusDot = $('status-dot');
-const progBar   = $('progress-bar');
-const logWrap   = $('log-wrap');
-const logEl     = $('log');
-const logToggle = $('log-toggle');
-const messages  = $('messages');
-const emptyState= $('empty-state');
-const userInput = $('user-input');
-const btnSend   = $('btn-send');
+const sidebar    = $('sidebar');
+const overlay    = $('overlay');
+const modelSel   = $('model-select');
+const statusDot  = $('status-dot');
+const progBar    = $('progress-bar');
+const logWrap    = $('log-wrap');
+const logEl      = $('log');
+const logToggle  = $('log-toggle');
+const messages   = $('messages');
+const emptyState = $('empty-state');
+const userInput  = $('user-input');
+const btnSend    = $('btn-send');
 
-// ── State ─────────────────────────────────────────────────────────────────────
-let pipe = null;
-let generating = false;
-let chats = {};        // { id: { id, title, messages[] } }
-let activeChatId = null;
-const CHATS_KEY = 'localmind_chats';
+let pipe = null, generating = false, loadingModel = false;
+let chats = {}, activeChatId = null;
+const CHATS_KEY  = 'localmind_chats';
+const MAX_CTX    = 10; // keep last N messages to avoid OOM
+let lastLogPct   = -1; // throttle progress log
 
-// ── Sidebar toggle (mobile) ───────────────────────────────────────────────────
-btnToggle.onclick = () => { sidebar.classList.toggle('open'); overlay.classList.toggle('show'); };
-overlay.onclick   = () => { sidebar.classList.remove('open'); overlay.classList.remove('show'); };
+// ── Sidebar ───────────────────────────────────────────────────────────────────
+$('btn-sidebar-toggle').onclick = () => { sidebar.classList.toggle('open'); overlay.classList.toggle('show'); };
+overlay.onclick = () => { sidebar.classList.remove('open'); overlay.classList.remove('show'); };
 
 // ── Log ───────────────────────────────────────────────────────────────────────
 logToggle.onclick = () => {
-  const open = logWrap.classList.toggle('expanded');
-  logToggle.classList.toggle('open', open);
+  const o = logWrap.classList.toggle('expanded');
+  logToggle.classList.toggle('open', o);
 };
-function addLog(msg, type = '') {
+function addLog(msg, type='') {
   const d = document.createElement('div');
-  d.className = 'log-line' + (type ? ' ' + type : '');
+  d.className = 'log-line' + (type ? ' '+type : '');
   d.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
   logEl.appendChild(d);
+  // cap log at 120 lines to avoid DOM bloat
+  while (logEl.children.length > 120) logEl.removeChild(logEl.firstChild);
   logEl.scrollTop = logEl.scrollHeight;
-  // auto-expand on interesting events
-  if (type === 'warn' || type === 'error') { logWrap.classList.add('expanded'); logToggle.classList.add('open'); }
+  if (type==='warn'||type==='error') { logWrap.classList.add('expanded'); logToggle.classList.add('open'); }
 }
 
-// ── Progress callback ─────────────────────────────────────────────────────────
+// ── Progress ──────────────────────────────────────────────────────────────────
 function onProgress(e) {
-  if (e.status === 'progress') {
-    const pct = Math.round((e.loaded / e.total) * 100);
-    progBar.style.width = pct + '%';
-    addLog(`↓ ${e.file} — ${pct}%`);
-  } else if (e.status === 'done') {
-    addLog(`✓ ${e.file || 'chunk'} loaded`, 'success');
-  } else if (e.status === 'initiate') {
-    addLog(`⬇ Fetching ${e.file}…`, 'info');
-  } else if (e.status === 'ready') {
-    addLog('Pipeline ready', 'success');
-  }
+  if (e.status==='initiate') { addLog(`⬇ Fetching ${e.file}…`,'info'); }
+  else if (e.status==='progress' && e.total) {
+    const pct = Math.round((e.loaded/e.total)*100);
+    progBar.style.width = pct+'%';
+    if (pct !== lastLogPct && pct%10===0) { addLog(`↓ ${e.file} ${pct}%`); lastLogPct=pct; }
+  } else if (e.status==='done') { addLog(`✓ ${e.file||'file'}`,'success'); }
 }
 
-// ── Model loader ──────────────────────────────────────────────────────────────
+// ── Model load ────────────────────────────────────────────────────────────────
 async function loadModel(modelId) {
-  setStatus('loading');
-  btnSend.disabled = true;
-  progBar.style.width = '0%';
-  addLog(`Loading model: ${modelId}`, 'info');
+  if (loadingModel) return;
+  loadingModel = true;
+  setStatus('loading'); btnSend.disabled = true; lastLogPct = -1; progBar.style.width='0%';
+  addLog(`Loading: ${modelId}`,'info');
 
   if (pipe) {
-    try { await pipe.dispose?.(); } catch(_) {}
-    pipe = null; tokenizer = null;
-    addLog('Previous pipeline disposed');
+    try { await pipe.dispose(); } catch(_) {}
+    pipe = null;
+    addLog('Old pipeline disposed');
   }
 
-  try {
-    pipe = await pipeline('text-generation', modelId, {
-      device: 'webgpu',
-      dtype: 'q4',
-      progress_callback: onProgress,
-    });
-    progBar.style.width = '100%';
-    setTimeout(() => progBar.style.width = '0%', 800);
-    setStatus('ready');
-    addLog(`Model ready: ${modelId}`, 'success');
-    if (!generating) btnSend.disabled = false;
-  } catch (err) {
-    addLog(`WebGPU failed (${err.message}), retrying WASM…`, 'warn');
+  const opts = { progress_callback: onProgress };
+  for (const [device, dtype] of [['webgpu','q4'],['wasm',null]]) {
     try {
-      pipe = await pipeline('text-generation', modelId, {
-        device: 'wasm',
-        progress_callback: onProgress,
-      });
-      progBar.style.width = '100%';
-      setTimeout(() => progBar.style.width = '0%', 800);
+      pipe = await pipeline('text-generation', modelId, dtype ? {...opts,device,dtype} : {...opts,device});
+      progBar.style.width='100%';
+      setTimeout(()=>progBar.style.width='0%', 600);
       setStatus('ready');
-      addLog(`Model ready (WASM): ${modelId}`, 'success');
+      addLog(`Ready (${device}): ${modelId}`,'success');
       if (!generating) btnSend.disabled = false;
-    } catch (err2) {
-      setStatus('error');
-      addLog(`Failed to load model: ${err2.message}`, 'error');
+      break;
+    } catch(err) {
+      addLog(`${device} failed: ${err.message}`,'warn');
+      pipe = null;
+      if (device==='wasm') { setStatus('error'); addLog('Could not load model','error'); }
     }
   }
+  loadingModel = false;
 }
 
-function setStatus(s) {
-  statusDot.className = 'status-dot' + (s ? ' ' + s : '');
-}
+function setStatus(s) { statusDot.className='status-dot'+(s?' '+s:''); }
 
-modelSel.onchange = () => loadModel(modelSel.value);
+modelSel.onchange = () => {
+  if (!confirm(`Load "${modelSel.options[modelSel.selectedIndex].text}"?\nThis will download the model weights.`)) {
+    // revert selection to current loaded model
+    return;
+  }
+  loadModel(modelSel.value);
+};
 
 // ── Storage ───────────────────────────────────────────────────────────────────
-async function saveChats() { await localforage.setItem(CHATS_KEY, chats); }
-async function loadChats() {
-  const saved = await localforage.getItem(CHATS_KEY);
-  if (saved) chats = saved;
-  renderChatList();
-}
+async function lf() { return window.localforage || await new Promise(r=>setTimeout(()=>r(window.localforage),500)); }
+async function saveChats() { try { (await lf()).setItem(CHATS_KEY, chats); } catch(_){} }
+async function loadChats() { try { const s=await (await lf()).getItem(CHATS_KEY); if(s) chats=s; } catch(_){} }
 
 // ── Chat management ───────────────────────────────────────────────────────────
 function newChat() {
-  const id = 'chat_' + Date.now();
-  chats[id] = { id, title: 'New Chat', messages: [] };
-  activeChatId = id;
-  saveChats();
-  renderChatList();
-  renderMessages();
+  const id='chat_'+Date.now();
+  chats[id]={id,title:'New Chat',messages:[]};
+  activeChatId=id; saveChats(); renderChatList(); renderMessages();
   sidebar.classList.remove('open'); overlay.classList.remove('show');
 }
-
 function deleteChat(id) {
   delete chats[id];
-  if (activeChatId === id) {
-    const ids = Object.keys(chats);
-    activeChatId = ids.length ? ids[ids.length - 1] : null;
-  }
-  saveChats();
-  renderChatList();
-  renderMessages();
+  if (activeChatId===id) { const ids=Object.keys(chats); activeChatId=ids.length?ids[ids.length-1]:null; }
+  saveChats(); renderChatList(); renderMessages();
 }
-
 function switchChat(id) {
-  activeChatId = id;
-  renderChatList();
-  renderMessages();
+  activeChatId=id; renderChatList(); renderMessages();
   sidebar.classList.remove('open'); overlay.classList.remove('show');
 }
+function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 function renderChatList() {
-  chatList.innerHTML = '';
-  const ids = Object.keys(chats).reverse();
-  ids.forEach(id => {
-    const chat = chats[id];
-    const item = document.createElement('div');
-    item.className = 'chat-item' + (id === activeChatId ? ' active' : '');
-    item.innerHTML = `<span class="chat-item-title">💬 ${escHtml(chat.title)}</span><button class="chat-del" title="Delete">✕</button>`;
-    item.onclick = e => { if (!e.target.classList.contains('chat-del')) switchChat(id); };
-    item.querySelector('.chat-del').onclick = e => { e.stopPropagation(); deleteChat(id); };
-    chatList.appendChild(item);
+  $('chat-list').innerHTML='';
+  Object.keys(chats).reverse().forEach(id => {
+    const el=document.createElement('div');
+    el.className='chat-item'+(id===activeChatId?' active':'');
+    el.innerHTML=`<span class="chat-item-title">💬 ${escHtml(chats[id].title)}</span><button class="chat-del">✕</button>`;
+    el.onclick=e=>{ if(!e.target.classList.contains('chat-del')) switchChat(id); };
+    el.querySelector('.chat-del').onclick=e=>{ e.stopPropagation(); deleteChat(id); };
+    $('chat-list').appendChild(el);
   });
 }
 
 function renderMessages() {
-  messages.innerHTML = '';
-  const chat = activeChatId && chats[activeChatId];
-  if (!chat || chat.messages.length === 0) {
-    messages.appendChild(emptyState);
-    return;
-  }
-  chat.messages.forEach(m => appendBubble(m.role, m.content, false));
-  messages.scrollTop = messages.scrollHeight;
+  messages.innerHTML='';
+  const chat=activeChatId&&chats[activeChatId];
+  if (!chat||!chat.messages.length) { messages.appendChild(emptyState); return; }
+  chat.messages.forEach(m=>appendBubble(m.role,m.content));
+  messages.scrollTop=messages.scrollHeight;
 }
 
-function appendBubble(role, content, streaming = false) {
-  const wrap = document.createElement('div');
-  wrap.className = `msg ${role}`;
-  const av = document.createElement('div');
-  av.className = 'avatar';
-  av.textContent = role === 'user' ? 'U' : 'AI';
-  const bub = document.createElement('div');
-  bub.className = 'bubble';
-  bub.textContent = content;
-  if (streaming) {
-    const cur = document.createElement('span');
-    cur.className = 'cursor';
-    bub.appendChild(cur);
-  }
-  wrap.appendChild(av);
-  wrap.appendChild(bub);
-  messages.appendChild(wrap);
-  messages.scrollTop = messages.scrollHeight;
-  return bub;
+function appendBubble(role, content, streaming=false) {
+  const wrap=document.createElement('div'); wrap.className=`msg ${role}`;
+  const av=document.createElement('div'); av.className='avatar';
+  av.textContent=role==='user'?'U':'AI';
+  const bub=document.createElement('div'); bub.className='bubble';
+  // use a textNode + cursor span to avoid rebuilding on every token
+  const tn=document.createTextNode(content); bub.appendChild(tn);
+  if (streaming) { const c=document.createElement('span'); c.className='cursor'; bub.appendChild(c); }
+  wrap.appendChild(av); wrap.appendChild(bub);
+  messages.appendChild(wrap); messages.scrollTop=messages.scrollHeight;
+  return { bub, tn };
 }
-
-function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 // ── Generation ────────────────────────────────────────────────────────────────
 async function generate(prompt) {
-  if (!pipe || generating) return;
-  const chat = chats[activeChatId];
-  if (!chat) return;
+  if (!pipe||generating) return;
+  const chat=chats[activeChatId]; if(!chat) return;
 
-  generating = true;
-  btnSend.disabled = true;
-  emptyState.remove();
+  generating=true; btnSend.disabled=true; emptyState.remove();
+  chat.messages.push({role:'user',content:prompt});
+  if (chat.title==='New Chat') chat.title=prompt.slice(0,36)+(prompt.length>36?'…':'');
+  appendBubble('user',prompt); renderChatList();
 
-  chat.messages.push({ role: 'user', content: prompt });
-  if (chat.title === 'New Chat') chat.title = prompt.slice(0, 36) + (prompt.length > 36 ? '…' : '');
-  appendBubble('user', prompt);
-  renderChatList();
+  // trim context to avoid OOM: keep system + last MAX_CTX messages
+  const ctx = chat.messages.length > MAX_CTX
+    ? chat.messages.slice(-MAX_CTX)
+    : chat.messages;
 
-  const aiBub = appendBubble('assistant', '', true);
-  let outputText = '';
-  let tokenCount = 0;
-  const t0 = performance.now();
+  const {bub, tn} = appendBubble('assistant','',true);
+  let out='', toks=0;
+  const t0=performance.now();
+  addLog('Generating…','info');
 
-  addLog('Generation started…', 'info');
+  // rAF-batched DOM updates
+  let pending='', rafId=null;
+  const flush=()=>{ tn.nodeValue=out; rafId=null; messages.scrollTop=messages.scrollHeight; };
 
   try {
-    const streamer = new TextStreamer(pipe.tokenizer, {
-      skip_prompt: true,
-      skip_special_tokens: true,
-      callback_function: (text) => {
-        tokenCount++;
-        outputText += text;
-        aiBub.childNodes.forEach(n => { if (n.className === 'cursor') n.remove(); });
-        aiBub.textContent = outputText;
-        const cur = document.createElement('span');
-        cur.className = 'cursor';
-        aiBub.appendChild(cur);
-        messages.scrollTop = messages.scrollHeight;
+    const streamer=new TextStreamer(pipe.tokenizer,{
+      skip_prompt:true, skip_special_tokens:true,
+      callback_function: text => {
+        toks++; out+=text; pending+=text;
+        if (!rafId) rafId=requestAnimationFrame(flush);
       }
     });
-    const result = await pipe(chat.messages, {
-      max_new_tokens: 512,
-      do_sample: true,
-      temperature: 0.7,
-      top_p: 0.9,
-      repetition_penalty: 1.1,
-      streamer,
+    const result=await pipe(ctx,{
+      max_new_tokens:256,
+      do_sample:false,        // greedy — stable, no OOM from sampling
+      repetition_penalty:1.15,
+      streamer
     });
-    if (!outputText) {
-      const raw = result?.[0]?.generated_text;
-      if (Array.isArray(raw)) outputText = raw.at(-1)?.content ?? '';
-      else if (typeof raw === 'string') {
-        const parts = raw.split(/\<\|assistant\|\>|assistant\n/i);
-        outputText = (parts.length > 1 ? parts.pop() : raw).trim();
+    if (rafId) { cancelAnimationFrame(rafId); flush(); }
+    // fallback if streamer produced nothing
+    if (!out) {
+      const raw=result?.[0]?.generated_text;
+      if (Array.isArray(raw)) out=raw.at(-1)?.content??'';
+      else if (typeof raw==='string') {
+        const p=raw.split(/(<\|assistant\|>|assistant\n)/i);
+        out=(p.length>1?p.pop():raw).trim();
       }
     }
-  } catch (err) {
-    addLog(`Generation error: ${err.message}`, 'error');
-    outputText = outputText || '[Error during generation]';
+  } catch(err) {
+    addLog(`Error: ${err.message}`,'error');
+    out=out||'[Generation failed — try a smaller model]';
   }
 
-  aiBub.childNodes.forEach(n => { if (n.className === 'cursor') n.remove(); });
-  aiBub.textContent = outputText.trim();
+  // finalize bubble
+  const cursor=bub.querySelector('.cursor'); if(cursor) cursor.remove();
+  tn.nodeValue=out.trim();
 
-  const elapsed = (performance.now() - t0) / 1000;
-  const tps = (tokenCount / elapsed).toFixed(1);
-  addLog(`✓ Done — ${tokenCount} tokens · ${tps} tok/s · ${elapsed.toFixed(2)}s`, 'success');
+  const secs=((performance.now()-t0)/1000).toFixed(2);
+  addLog(`✓ ${toks} tokens · ${(toks/+secs).toFixed(1)} tok/s · ${secs}s`,'success');
 
-  chat.messages.push({ role: 'assistant', content: outputText.trim() });
+  chat.messages.push({role:'assistant',content:out.trim()});
   await saveChats();
-
-  generating = false;
-  if (pipe) btnSend.disabled = false;
-  messages.scrollTop = messages.scrollHeight;
+  generating=false; if(pipe) btnSend.disabled=false;
+  messages.scrollTop=messages.scrollHeight;
 }
 
-// ── Input handling ────────────────────────────────────────────────────────────
-userInput.addEventListener('input', () => {
-  userInput.style.height = 'auto';
-  userInput.style.height = Math.min(userInput.scrollHeight, 160) + 'px';
+// ── Input ─────────────────────────────────────────────────────────────────────
+userInput.addEventListener('input',()=>{
+  userInput.style.height='auto';
+  userInput.style.height=Math.min(userInput.scrollHeight,160)+'px';
 });
-
-userInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
-});
-
-btnSend.onclick = handleSend;
+userInput.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleSend();} });
+btnSend.onclick=handleSend;
 
 function handleSend() {
-  const text = userInput.value.trim();
-  if (!text || !pipe || generating) return;
+  const text=userInput.value.trim();
+  if (!text||!pipe||generating) {
+    if (!pipe&&!loadingModel) { addLog('Click a model in the dropdown to load it first','warn'); logWrap.classList.add('expanded'); logToggle.classList.add('open'); }
+    return;
+  }
   if (!activeChatId) newChat();
-  userInput.value = '';
-  userInput.style.height = 'auto';
+  userInput.value=''; userInput.style.height='auto';
   generate(text);
 }
 
-// Hint chips
-document.querySelectorAll('.chip').forEach(c => {
-  c.onclick = () => {
-    if (!activeChatId) newChat();
-    userInput.value = c.dataset.prompt;
-    handleSend();
+document.querySelectorAll('.chip').forEach(c=>{
+  c.onclick=()=>{
+    if(!pipe){addLog('Load a model first — select one from the dropdown','warn');logWrap.classList.add('expanded');logToggle.classList.add('open');return;}
+    if(!activeChatId) newChat();
+    userInput.value=c.dataset.prompt; handleSend();
   };
 });
 
-btnNew.onclick = newChat;
+$('btn-new-chat').onclick=newChat;
 
-// ── Init ──────────────────────────────────────────────────────────────────────
+// ── Init (NO auto-load — user must pick model) ────────────────────────────────
 async function init() {
   await loadChats();
-  const ids = Object.keys(chats);
-  if (ids.length) {
-    activeChatId = ids[ids.length - 1];
-    renderChatList();
-    renderMessages();
-  } else {
-    newChat();
-  }
-  addLog('LocalMind initialized. Loading model…', 'info');
-  await loadModel(modelSel.value);
+  const ids=Object.keys(chats);
+  if (ids.length) { activeChatId=ids[ids.length-1]; renderChatList(); renderMessages(); }
+  else { newChat(); }
+  addLog('Ready — select a model from the dropdown to begin','info');
+  logWrap.classList.add('expanded'); logToggle.classList.add('open');
 }
 
 init();
