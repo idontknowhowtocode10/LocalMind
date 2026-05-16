@@ -9,10 +9,10 @@ workflows:
       - name: Install Node Modules
         script: npm install
       - name: Generate Android Project Shell
-        script: npx @react-native-community/cli init LocalMind --directory android --skip-install
+        script: npx @react-native-community/cli@latest init LocalMind --skip-install
       - name: Compile Android Debug APK
         script: |
-          cd android
+          cd LocalMind/android
           ./gradlew assembleDebug
     artifacts:
-      - android/app/build/outputs/apk/debug/*.apk
+      - LocalMind/android/app/build/outputs/apk/debug/*.apk
