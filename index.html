@@ -372,6 +372,7 @@ body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-fam
         <option value="smollm360">SmolLM2 360M — Balanced (~360 MB)</option>
         <option value="qwen05">Qwen2.5 0.5B — Smarter (~310 MB)</option>
         <option value="llama1b">Llama 3.2 1B — Best* (~780 MB)</option>
+        <option value="llama1b_q4">Llama 3.2 1B Ultra-Q4 — Smallest (~670 MB)</option>
       </select>
     </div>
     <div class="sdot" id="sdot"></div>
@@ -534,6 +535,9 @@ const MODELS={
   // Llama: force q4 only, cap tokens hard, warn user — 1B model is borderline on Android
   llama1b:  {id:'onnx-community/Llama-3.2-1B-Instruct-q4f16',label:'Llama 3.2 1B',  mb:780, safe:false,
              maxTok:128, dtype:'q4f16'},
+  // Highly quantized: pure int4 weights + int8 activations — smallest Llama 1B variant
+  llama1b_q4:{id:'onnx-community/Llama-3.2-1B-Instruct-ONNX',label:'Llama 3.2 1B · Ultra-Q4', mb:670, safe:false,
+              maxTok:128, dtype:'q4'},
 };
 
 let modelCache=loadJ(MC_KEY,{});
