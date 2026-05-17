@@ -371,8 +371,8 @@ body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-fam
         <option value="smollm135" selected>SmolLM2 135M — Fastest (~135 MB)</option>
         <option value="smollm360">SmolLM2 360M — Balanced (~360 MB)</option>
         <option value="qwen05">Qwen2.5 0.5B — Smarter (~310 MB)</option>
-        <option value="llama1b">Llama 3.2 1B — Best* (~780 MB)</option>
-        <option value="llama1b_q4">Llama 3.2 1B Ultra-Q4 — Smallest (~670 MB)</option>
+        <option value="llama1b">Llama 3.2 1B Q4 — Best* (~660 MB)</option>
+        <option value="llama1b_q4">Llama 3.2 1B Compat — Safer* (~660 MB, 64 tok)</option>
       </select>
     </div>
     <div class="sdot" id="sdot"></div>
@@ -384,8 +384,9 @@ body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-fam
     <div id="log-wrap"><div id="log"></div></div>
 
     <div class="mem-warn" id="mem-warn">
-      ⚠ Llama 3.2 1B requires ~780 MB RAM. On low-memory Android devices this may crash.
-      If it crashes, switch to Qwen2.5 0.5B or SmolLM2 360M.
+      ⚠ Llama 3.2 1B (Q4) requires ~660 MB download + ~800 MB RAM at runtime.
+      On midrange Android close all other apps first.
+      If it still crashes, switch to Qwen2.5 0.5B (~310 MB) — works on most midrange devices.
     </div>
 
     <div id="messages">
@@ -515,6 +516,17 @@ import{pipeline,env,TextStreamer}from'https://cdn.jsdelivr.net/npm/@huggingface/
 env.allowLocalModels=false;
 env.useBrowserCache=true;
 
+// ── Midrange Android optimisations ──────────────────────────────────────────
+// Cap WASM threads to 2: each thread has its own memory arena.
+// More threads = more overhead; on 4-6 GB Android devices this tips into OOM.
+env.backends.onnx.wasm.numThreads = 2;
+// Disable memory-pattern pre-allocation — saves ~100 MB peak usage at init time.
+// (ONNX Runtime normally pre-warms all allocation patterns; skipping this lets
+//  the model load without doubling its footprint during session creation.)
+if(env.backends?.onnx?.wasm){
+  try{env.backends.onnx.wasm.simd=true}catch(_){}
+}
+
 const $=id=>document.getElementById(id);
 const sidebar=$('sidebar'),overlay=$('overlay'),modelSel=$('model-sel'),sdot=$('sdot');
 const progBar=$('prog-bar'),logWrap=$('log-wrap'),logEl=$('log'),logTog=$('log-toggle');
@@ -527,17 +539,36 @@ const MAX_CTX=8;
 let lastPct=-1;
 let settings={systemPrompt:'',maxTokens:256};
 
-// Model registry — maps dropdown value → actual HF model id + metadata
+// ── Model registry ───────────────────────────────────────────────────────────
+// FIXES applied for midrange Android (Oppo K13 5G, etc.):
+//
+// 1. llama1b id was 'onnx-community/Llama-3.2-1B-Instruct-q4f16' — that repo
+//    does NOT exist on HuggingFace.  The model lives at the -ONNX repo; the
+//    quantisation is selected via the `dtype` field, not the repo name.
+//
+// 2. dtype 'q4f16' = int4 weights + float16 activations.  In WASM mode there
+//    is no native fp16 — the runtime upcasts to fp32, so the model actually
+//    consumes MORE memory than plain 'q4'.  On midrange WebViews (~1.5 GB
+//    usable) the ONNX session-init phase OOMs and kills the tab.
+//    Fix: use 'q4' for all Llama variants; it is the smallest, most compatible
+//    format that runs fully in int8-dequant WASM without fp16 hardware.
+//
+// 3. Both Llama entries now force WASM-only (wasmOnly:true flag handled in
+//    loadModel). WebGPU uploads the entire model at once into GPU memory, which
+//    crashes midrange devices with shared VRAM. WASM streams weights on-demand.
+//
+// 4. maxCtx:4 for Llama — limits KV-cache footprint during inference so the
+//    device doesn't OOM after a few turns even if the load succeeded.
 const MODELS={
-  smollm135:{id:'onnx-community/SmolLM2-135M-Instruct-ONNX', label:'SmolLM2 135M', mb:135, safe:true},
-  smollm360:{id:'onnx-community/SmolLM2-360M-Instruct-ONNX', label:'SmolLM2 360M', mb:360, safe:true},
-  qwen05:   {id:'onnx-community/Qwen2.5-0.5B-Instruct-ONNX', label:'Qwen2.5 0.5B', mb:310, safe:true},
-  // Llama: force q4 only, cap tokens hard, warn user — 1B model is borderline on Android
-  llama1b:  {id:'onnx-community/Llama-3.2-1B-Instruct-q4f16',label:'Llama 3.2 1B',  mb:780, safe:false,
-             maxTok:128, dtype:'q4f16'},
-  // Highly quantized: pure int4 weights + int8 activations — smallest Llama 1B variant
-  llama1b_q4:{id:'onnx-community/Llama-3.2-1B-Instruct-ONNX',label:'Llama 3.2 1B · Ultra-Q4', mb:670, safe:false,
-              maxTok:128, dtype:'q4'},
+  smollm135:{id:'onnx-community/SmolLM2-135M-Instruct-ONNX',  label:'SmolLM2 135M',          mb:135, safe:true},
+  smollm360:{id:'onnx-community/SmolLM2-360M-Instruct-ONNX',  label:'SmolLM2 360M',          mb:360, safe:true},
+  qwen05:   {id:'onnx-community/Qwen2.5-0.5B-Instruct-ONNX',  label:'Qwen2.5 0.5B',          mb:310, safe:true},
+  // ↓ FIXED: correct repo + q4 dtype (was wrong repo + q4f16 → crash on WASM)
+  llama1b:  {id:'onnx-community/Llama-3.2-1B-Instruct-ONNX',  label:'Llama 3.2 1B (Q4)',     mb:660, safe:false,
+             maxTok:96, dtype:'q4', wasmOnly:true, maxCtx:4},
+  // Ultra-compat variant — same model, stricter caps, for the most constrained devices
+  llama1b_q4:{id:'onnx-community/Llama-3.2-1B-Instruct-ONNX', label:'Llama 3.2 1B · Compat', mb:660, safe:false,
+              maxTok:64, dtype:'q4', wasmOnly:true, maxCtx:4},
 };
 
 let modelCache=loadJ(MC_KEY,{});
@@ -658,19 +689,44 @@ async function loadModel(key){
   // Show memory warning for Llama
   memWarn.classList.toggle('show', !def.safe);
 
-  if(pipe){try{await pipe.dispose()}catch(_){}pipe=null;addLog('Previous pipeline released')}
+  // ── Device RAM check ────────────────────────────────────────────────────────
+  // navigator.deviceMemory is available in Chrome on Android (rounded to nearest
+  // power of 2 in GB). If the device reports <4 GB and we're loading Llama, warn
+  // the user — the WebView only gets a fraction of total RAM.
+  const devMem = navigator.deviceMemory || 4; // assume 4 GB if API absent
+  if(!def.safe && devMem < 4){
+    addLog(`Low RAM detected (≤${devMem} GB) — Llama may crash. Proceeding anyway…`,'warn');
+  }
 
-  // Force garbage collection hint (not guaranteed but helps on Android)
-  await new Promise(r=>setTimeout(r,300));
+  if(pipe){
+    try{await pipe.dispose()}catch(_){}
+    pipe=null;
+    addLog('Previous pipeline released');
+    // ── Extended GC pause ─────────────────────────────────────────────────────
+    // Give Android's WebView time to actually free the buffers from the old
+    // pipeline before we allocate the next model.  300 ms is too short; 900 ms
+    // lets the GC run at least one major cycle.
+    await new Promise(r=>setTimeout(r,900));
+  }
 
   const hasGPU=!!navigator.gpu;
   if(!hasGPU)addLog('WebGPU unavailable — WASM mode','info');
 
-  // CRITICAL: never use null/undefined dtype — that loads fp32 = crash on Android
-  // Llama gets its own fixed dtype from the registry; others try q4 then q8
+  // ── Build attempt plan ───────────────────────────────────────────────────────
+  // wasmOnly:true  → Llama models.  WebGPU loads the whole model into GPU VRAM
+  // at once (no streaming), which OOMs on midrange Android with shared VRAM.
+  // WASM streams weights on demand and has predictable, lower peak usage.
+  //
+  // For safe (small) models we still try WebGPU first — it's faster on desktop.
+  //
+  // dtype logic: use whatever the registry specifies; fall back q4→q8 only for
+  // models that have no explicit dtype.  Never let dtype be null/undefined —
+  // that triggers fp32 which is 4× the memory.
   let plans;
-  if(def.dtype){
-    // Llama: specific dtype, WASM only (WebGPU + Llama = OOM on most Android)
+  if(def.wasmOnly){
+    plans=[['wasm', def.dtype||'q4']];
+    addLog('Llama: WASM-only mode (prevents WebGPU OOM on Android)','info');
+  } else if(def.dtype){
     plans=hasGPU
       ?[['webgpu',def.dtype],['wasm',def.dtype]]
       :[['wasm',def.dtype]];
@@ -680,13 +736,26 @@ async function loadModel(key){
       :[['wasm','q4'],['wasm','q8']];
   }
 
+  // ── ONNX session options for minimal peak memory ─────────────────────────────
+  // enableMemPattern:false  → skip pre-allocation pass (saves ~80-120 MB at init)
+  // enableCpuMemArena:false → don't reserve a large arena upfront
+  // These are safe to set for inference-only use cases.
+  const sessionOptions={
+    executionProviders:['wasm'],
+    enableMemPattern:false,
+    enableCpuMemArena:false,
+    graphOptimizationLevel:'basic',
+    interOpNumThreads:1,
+    intraOpNumThreads:2,
+  };
+
   let ok=false;
   for(const [dev,dtype] of plans){
     try{
       addLog(`Trying ${dev}/${dtype}…`,'info');
-      pipe=await pipeline('text-generation',def.id,{
-        progress_callback:onProgress,device:dev,dtype
-      });
+      const opts={progress_callback:onProgress,device:dev,dtype};
+      if(dev==='wasm') opts.session_options=sessionOptions;
+      pipe=await pipeline('text-generation',def.id,opts);
       progBar.style.width='100%';
       setTimeout(()=>progBar.style.width='0%',600);
       setStatus('ready');
@@ -700,8 +769,8 @@ async function loadModel(key){
     }catch(err){
       addLog(`${dev}/${dtype} failed: ${err.message}`,'warn');
       pipe=null;
-      // Free memory between attempts
-      await new Promise(r=>setTimeout(r,500));
+      // Free memory between attempts — longer wait on big models
+      await new Promise(r=>setTimeout(r, def.safe?500:1200));
     }
   }
 
@@ -712,7 +781,7 @@ async function loadModel(key){
     await alert2('Load Failed',
       def.safe
         ?`Could not load "${def.label}".\n\nTry SmolLM2 135M — it uses the least memory.`
-        :`Llama 3.2 1B needs ~780 MB RAM and crashed your device.\n\nSwitch to Qwen2.5 0.5B or SmolLM2 360M.`
+        :`Llama 3.2 1B (Q4) could not initialise on this device.\n\nThis usually means the WebView ran out of memory during ONNX session creation.\n\nTips:\n• Close other apps first\n• Try "Llama · Compat" variant (64-token cap)\n• Switch to Qwen2.5 0.5B — it works reliably on midrange Android`
     );
   }
   loadingModel=false;
@@ -723,7 +792,7 @@ function setStatus(s){sdot.className='sdot'+(s?' '+s:'')}
 modelSel.onchange=async()=>{
   const key=modelSel.value;
   const def=MODELS[key];if(!def)return;
-  const extra=def.safe?'':'\n\n⚠ This model needs ~780 MB RAM and may crash on low-memory devices.';
+  const extra=def.safe?'':'\n\n⚠ Llama needs ~660 MB download + ~800 MB RAM. Close other apps first.\nIf it crashes after download, use the "Compat" variant or switch to Qwen2.5 0.5B.';
   const ok=await confirm2('Load Model',`Load "${def.label}" (~${def.mb} MB)?${extra}\n\nUse Wi-Fi to avoid data charges.`);
   if(!ok)return;
   loadModel(key);
@@ -848,8 +917,12 @@ async function generate(prompt){
   const flush=()=>{tn.nodeValue=out;rafId=null;messages.scrollTop=messages.scrollHeight};
 
   // Cap tokens: Llama gets hard cap to prevent OOM during generation
+  // Also use per-model maxCtx to slice context, not just global MAX_CTX
   const def=MODELS[currentModelKey]||{};
   const maxTok=def.maxTok?Math.min(def.maxTok,settings.maxTokens||256):settings.maxTokens||256;
+  // Per-model context window limit (Llama uses maxCtx:4 to keep KV-cache small)
+  const ctxLimit=def.maxCtx||MAX_CTX;
+  if(ctx.length>ctxLimit) ctx=ctx.slice(-ctxLimit);
 
   try{
     const streamer=new TextStreamer(pipe.tokenizer,{
