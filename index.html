@@ -1065,35 +1065,70 @@ init();
   }
   
   // ── ONNX HQ Deepfake loader (~554MB) ───────────────────────────────────────
+  // Root-cause fix: passing a URL lets ORT try to resolve external weight shards
+  // relative to that URL, which fails (CORS / missing .data file).
+  // Solution: stream the model bytes ourselves → create session from ArrayBuffer.
   async function loadONNX() {
     if (ortSession) return true;
     if (ortLoading) return false;
     ortLoading = true;
-    setStat('⬇ Downloading ONNX Model (~554 MB)... This takes a while.');
+
+    // Configure WASM paths BEFORE any session work
+    ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.1/dist/';
+    ort.env.wasm.numThreads = 1; // Safer on Android (avoids SharedArrayBuffer issues)
+
     try {
-      ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.1/dist/';
-      ortSession = await ort.InferenceSession.create(MODES.inswapper_hq.modelUrl, {
-        executionProviders: ['webgl', 'wasm'],
-        graphOptimizationLevel: 'all'
-      });
-      ortLoading = false;
-      setStat('✓ HQ ONNX Model loaded');
-      return true;
-    } catch(e) {
-      ortLoading = false;
-      console.error("ONNX Load Error:", e);
-      // Fallback to WASM if WebGL fails on the specific Android GPU
-      try {
-        setStat('⚠ WebGL failed, retrying with WASM CPU (Slower)...');
-        ortSession = await ort.InferenceSession.create(MODES.inswapper_hq.modelUrl, {
-          executionProviders: ['wasm']
-        });
-        setStat('✓ HQ ONNX Model loaded (WASM)');
-        return true;
-      } catch (err2) {
-        setStat('❌ ONNX load failed: ' + err2.message);
-        return false;
+      setStat('⬇ Downloading HQ model (~554 MB) — keep screen on…');
+
+      const resp = await fetch(MODES.inswapper_hq.modelUrl);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching model`);
+
+      const total = +(resp.headers.get('content-length') || 0);
+      const reader = resp.body.getReader();
+      const chunks = [];
+      let loaded = 0;
+
+      // Stream with live progress
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        loaded += value.length;
+        const mb = (loaded / 1048576).toFixed(0);
+        const pct = total ? Math.round((loaded / total) * 100) : '?';
+        setStat(`⬇ HQ model: ${pct}% · ${mb}${total ? '/'+Math.round(total/1048576) : ''} MB`);
       }
+
+      // Concatenate into a single contiguous buffer
+      const modelBuf = new Uint8Array(chunks.reduce((s, c) => s + c.length, 0));
+      let off = 0;
+      for (const c of chunks) { modelBuf.set(c, off); off += c.length; }
+
+      setStat('⚙ Initialising ONNX session…');
+
+      // Try WebGL first (GPU-accelerated), fall back to pure WASM
+      const plans = [['webgl', 'wasm'], ['wasm']];
+      for (const ep of plans) {
+        try {
+          ortSession = await ort.InferenceSession.create(modelBuf.buffer, {
+            executionProviders: ep,
+            graphOptimizationLevel: 'all'
+          });
+          ortLoading = false;
+          setStat(`✓ HQ model ready (${ep[0] === 'webgl' ? 'WebGL+WASM' : 'WASM CPU'})`);
+          return true;
+        } catch (e) {
+          console.warn(`ONNX [${ep.join('+')}] failed:`, e);
+          if (ep[0] === 'webgl') setStat('⚠ WebGL failed — retrying with WASM CPU…');
+        }
+      }
+      throw new Error('All execution providers failed');
+
+    } catch (e) {
+      ortLoading = false;
+      console.error('ONNX Load Error:', e);
+      setStat('❌ ONNX load failed: ' + e.message);
+      return false;
     }
   }
 
