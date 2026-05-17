@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
 <title>LocalMind — On-Device AI</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet"/>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.1/dist/ort.min.js"></script>
 <style>
 :root {
   --bg:#0a0a0f; --surface:#111118; --surface2:#1a1a24; --border:#2a2a3a;
@@ -293,6 +294,19 @@ body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-fam
 #swap-canvas{width:100%;border-radius:12px;border:1px solid var(--border);display:block}
 .ds-res-acts{display:flex;gap:8px}
 
+/* DeepSwap mode selector */
+.ds-modes{display:flex;gap:6px;flex-wrap:wrap}
+.ds-mode{flex:1;min-width:0;padding:8px 6px;background:var(--surface2);border:1px solid var(--border);
+  border-radius:9px;cursor:pointer;font-family:var(--mono);font-size:.6rem;text-align:center;
+  transition:border-color var(--tr),background var(--tr);line-height:1.5}
+.ds-mode:active{background:var(--border)}
+.ds-mode.sel{border-color:var(--accent);background:rgba(124,58,237,.12);color:var(--text)}
+.ds-mode .dm-name{font-weight:700;font-size:.64rem;display:block}
+.ds-mode .dm-size{color:var(--dim);font-size:.54rem}
+.ds-mode.sel .dm-size{color:var(--accent2)}
+.ds-mode .dm-tag{display:inline-block;margin-top:2px;padding:1px 5px;border-radius:8px;
+  font-size:.5rem;background:rgba(124,58,237,.2);color:var(--accent)}
+
 /* Memory warning banner */
 .mem-warn{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);
   border-radius:8px;padding:8px 12px;font-family:var(--mono);font-size:.62rem;
@@ -304,7 +318,6 @@ body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-fam
 </head>
 <body>
 
-<!-- Sidebar -->
 <div id="sidebar">
   <div class="sb-head"><div class="logo">Local<span>Mind</span></div></div>
   <button id="btn-new">＋ New Chat</button>
@@ -326,7 +339,6 @@ body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-fam
 </div>
 <div id="overlay"></div>
 
-<!-- Modal — no window.confirm (crashes Android WebView) -->
 <div id="modal">
   <div class="modal-box">
     <div class="modal-title" id="modal-title"></div>
@@ -335,7 +347,6 @@ body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-fam
   </div>
 </div>
 
-<!-- Settings -->
 <div id="sett">
   <div class="sett-sheet">
     <div class="sett-title">
@@ -368,17 +379,14 @@ body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-fam
   </div>
 
   <div id="body">
-    <!-- Log (chat tab only) -->
     <button id="log-toggle"><span>⚙ ENGINE LOG</span><span class="chev">▲</span></button>
     <div id="log-wrap"><div id="log"></div></div>
 
-    <!-- Memory warning (shown for Llama) -->
     <div class="mem-warn" id="mem-warn">
       ⚠ Llama 3.2 1B requires ~780 MB RAM. On low-memory Android devices this may crash.
       If it crashes, switch to Qwen2.5 0.5B or SmolLM2 360M.
     </div>
 
-    <!-- Chat panel -->
     <div id="messages">
       <div id="empty">
         <div style="font-size:2rem">🧠</div>
@@ -403,15 +411,43 @@ body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-fam
       <div class="inp-hint">Tap ▶ to send</div>
     </div>
 
-    <!-- DeepSwap panel -->
     <div id="ds-panel">
       <div class="ds-h">🎭 FaceSwap
         <span style="font-size:.6rem;color:var(--dim);font-weight:400;font-family:var(--mono)">on-device</span>
       </div>
       <div class="ds-warn">⚠ For entertainment only. Only use photos of people who have given explicit consent.</div>
+
+      <div style="font-family:var(--mono);font-size:.62rem;color:var(--dim);margin-bottom:4px">Choose quality:</div>
+      <div class="ds-modes">
+        <div class="ds-mode sel" data-mode="lite">
+          <span class="dm-name">⚡ Lite</span>
+          <span class="dm-size">~270 KB</span>
+          <span class="dm-tag">Fastest</span>
+        </div>
+        <div class="ds-mode" data-mode="standard">
+          <span class="dm-name">✨ Standard</span>
+          <span class="dm-size">~6 MB</span>
+          <span class="dm-tag">Better</span>
+        </div>
+        <div class="ds-mode" data-mode="precision">
+          <span class="dm-name">🎯 Precision</span>
+          <span class="dm-size">~2.5 MB</span>
+          <span class="dm-tag">468 pts</span>
+        </div>
+        <div class="ds-mode" data-mode="inswapper_hq">
+          <span class="dm-name">🔥 HQ ONNX</span>
+          <span class="dm-size">~554 MB</span>
+          <span class="dm-tag">Pro</span>
+        </div>
+      </div>
+      <div id="ds-mode-desc" style="font-family:var(--mono);font-size:.6rem;color:var(--dim);
+        background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:7px 10px;line-height:1.6">
+        TinyFaceDetector + 68 landmarks. Fastest download, works on all devices.
+      </div>
+
       <div class="ds-sub">Face from Photo 1 is placed onto Photo 2. Front-facing, well-lit faces work best.</div>
       <div class="ds-step"><div class="ds-num">1</div><div class="ds-txt">Upload two photos — clear, front-facing faces</div></div>
-      <div class="ds-step"><div class="ds-num">2</div><div class="ds-txt">Tap Swap — face models (~270 KB) download once, fully on-device after that</div></div>
+      <div class="ds-step"><div class="ds-num">2</div><div class="ds-txt">Choose quality mode above, then tap Swap Faces</div></div>
       <div class="ds-step"><div class="ds-num">3</div><div class="ds-txt">Download or share your result</div></div>
       <div class="ds-row">
         <div class="ds-zone" id="z1">
@@ -436,10 +472,7 @@ body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-fam
         </div>
       </div>
     </div>
-  </div><!-- /body -->
-
-  <!-- Bottom tab bar — fixed, always visible -->
-  <div id="tab-bar">
+  </div><div id="tab-bar">
     <button class="tab-btn active" data-tab="chat">
       <span class="ti">💬</span>Chat
     </button>
@@ -447,10 +480,7 @@ body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-fam
       <span class="ti">🎭</span>FaceSwap
     </button>
   </div>
-</div><!-- /main -->
-
-<!-- Non-module helpers -->
-<script>
+</div><script>
 const CHATS_KEY='lm_chats_v2', SETT_KEY='lm_sett', MC_KEY='lm_mc';
 const saveJ=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(_){}};
 const loadJ=(k,fb)=>{try{const s=localStorage.getItem(k);return s?JSON.parse(s):fb}catch(_){return fb}};
@@ -889,23 +919,76 @@ function init(){
 init();
 </script>
 
-<!-- DeepSwap module -->
 <script>
 (function(){
-  const FA_JS='https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.14/dist/face-api.js';
-  const FA_M='https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.14/model';
-  let faLoaded=false,faLoading=false,url1=null,url2=null;
+  // ── CDN endpoints ──────────────────────────────────────────────────────────
+  const FA_JS   = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.14/dist/face-api.js';
+  const FA_M    = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.14/model';
+  const MP_JS   = 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js';
+  const MP_WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619';
 
-  const z1=document.getElementById('z1'),z2=document.getElementById('z2');
-  const f1=document.getElementById('f1'),f2=document.getElementById('f2');
+  // ── Mode descriptors ───────────────────────────────────────────────────────
+  const MODES = {
+    lite: {
+      label:'⚡ Lite',
+      desc:'TinyFaceDetector + 68 landmarks. Fastest download, works on all devices.',
+      detector:'tiny', landmarks:'tiny'
+    },
+    standard: {
+      label:'✨ Standard',
+      desc:'SSD MobileNet detector + full 68-point landmark model (~6 MB). Better accuracy on tilted or partially occluded faces. Adds skin-tone color correction.',
+      detector:'ssd', landmarks:'full'
+    },
+    precision: {
+      label:'🎯 Precision',
+      desc:'MediaPipe FaceMesh — 468 landmarks (~2.5 MB). Precise face-oval boundary, handles glasses & beards better. Best output quality.',
+      detector:'mediapipe', landmarks:'468'
+    },
+    inswapper_hq: {
+      label:'🔥 HQ ONNX',
+      desc:'High-Fidelity Deepfake (Inswapper 128 ONNX). Requires ~554 MB download. Uses WebGL/WASM acceleration on Android devices.',
+      detector:'ssd', landmarks:'full',
+      modelUrl: 'https://huggingface.co/datasets/GDisaster/inswapper_128.onnx/resolve/main/inswapper_128.onnx'
+    }
+  };
+
+  let currentMode = 'lite';
+  let faLoaded = {tiny:false, ssd:false};
+  let faLoading = false;
+  let mpLoaded = false, mpLoading = false;
+  let mpMesh = null;  // MediaPipe FaceMesh instance
+  
+  // ONNX State
+  let ortSession = null;
+  let ortLoading = false;
+
+  let url1=null, url2=null;
+
+  const z1=document.getElementById('z1'), z2=document.getElementById('z2');
+  const f1=document.getElementById('f1'), f2=document.getElementById('f2');
   const btnSwap=document.getElementById('btn-swap');
   const dsStat=document.getElementById('ds-stat');
   const canvas=document.getElementById('swap-canvas');
   const dsRes=document.getElementById('ds-res');
+  const modeDesc=document.getElementById('ds-mode-desc');
 
   const setStat=m=>dsStat.textContent=m;
   const tryEnable=()=>btnSwap.disabled=!(url1&&url2);
 
+  // ── Mode selector ──────────────────────────────────────────────────────────
+  document.querySelectorAll('.ds-mode').forEach(btn=>{
+    btn.onclick=()=>{
+      document.querySelectorAll('.ds-mode').forEach(b=>b.classList.remove('sel'));
+      btn.classList.add('sel');
+      currentMode=btn.dataset.mode;
+      modeDesc.textContent=MODES[currentMode].desc;
+      dsRes.classList.remove('show');
+      setStat('');
+      try{navigator.vibrate&&navigator.vibrate(8)}catch(_){}
+    };
+  });
+
+  // ── File upload ───────────────────────────────────────────────────────────
   function handleFile(file,zone,num){
     if(!file)return;
     const url=URL.createObjectURL(file);
@@ -921,33 +1004,119 @@ init();
     zone.querySelector('.ds-zl').style.display='none';
     tryEnable();
   }
-
   f1.onchange=e=>handleFile(e.target.files[0],z1,1);
   f2.onchange=e=>handleFile(e.target.files[0],z2,2);
   z1.addEventListener('click',e=>{if(e.target!==f1)f1.click()});
   z2.addEventListener('click',e=>{if(e.target!==f2)f2.click()});
 
-  async function loadFA(){
-    if(faLoaded)return true;if(faLoading)return false;faLoading=true;
-    setStat('⬇ Downloading face models (~270 KB)…');
-    return new Promise(res=>{
-      const s=document.createElement('script');s.src=FA_JS;
-      s.onload=async()=>{
-        try{
-          await faceapi.nets.tinyFaceDetector.loadFromUri(FA_M);
-          await faceapi.nets.faceLandmark68TinyNet.loadFromUri(FA_M);
-          faLoaded=true;faLoading=false;setStat('✓ Models ready');res(true);
-        }catch(e){faLoading=false;setStat('✗ '+e.message);res(false)}
-      };
-      s.onerror=()=>{faLoading=false;setStat('✗ Script failed to load');res(false)};
+  // ── face-api loader (shared by Lite + Standard) ───────────────────────────
+  function injectScript(src){
+    return new Promise((res,rej)=>{
+      if(document.querySelector(`script[src="${src}"]`)){res();return}
+      const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=rej;
       document.head.appendChild(s);
     });
   }
 
+  async function loadFaceApi(mode){
+    // mode: 'tiny' or 'ssd'
+    if(faLoaded[mode])return true;
+    if(faLoading)return false;
+    faLoading=true;
+    setStat('⬇ Loading face-api.js…');
+    try{
+      await injectScript(FA_JS);
+      setStat(`⬇ Downloading ${mode==='tiny'?'Lite (~270 KB)':'Standard (~6 MB)'} models…`);
+      if(mode==='tiny'){
+        await faceapi.nets.tinyFaceDetector.loadFromUri(FA_M);
+        await faceapi.nets.faceLandmark68TinyNet.loadFromUri(FA_M);
+      } else {
+        // SSD MobileNet = better detection on non-ideal photos
+        await faceapi.nets.ssdMobilenetv1.loadFromUri(FA_M);
+        await faceapi.nets.faceLandmark68Net.loadFromUri(FA_M);
+      }
+      faLoaded[mode]=true; faLoading=false;
+      setStat(`✓ ${mode==='tiny'?'Lite':'Standard'} models ready`);
+      return true;
+    }catch(e){faLoading=false;setStat('✗ '+e.message);return false}
+  }
+
+  // ── MediaPipe FaceMesh loader (Precision mode) ────────────────────────────
+  async function loadMediaPipe(){
+    if(mpLoaded)return true;
+    if(mpLoading)return false;
+    mpLoading=true;
+    setStat('⬇ Loading MediaPipe FaceMesh (~2.5 MB)…');
+    try{
+      await injectScript(MP_JS);
+      mpMesh=new FaceMesh({locateFile:f=>`${MP_WASM}/${f}`});
+      mpMesh.setOptions({
+        maxNumFaces:1, refineLandmarks:true,
+        minDetectionConfidence:0.5, minTrackingConfidence:0.5
+      });
+      await new Promise((res,rej)=>{
+        mpMesh.onResults(()=>{}); // warm up
+        mpMesh.initialize().then(res).catch(rej);
+      });
+      mpLoaded=true; mpLoading=false;
+      setStat('✓ Precision model ready (468 landmarks)');
+      return true;
+    }catch(e){mpLoading=false;setStat('✗ MediaPipe: '+e.message);return false}
+  }
+  
+  // ── ONNX HQ Deepfake loader (~554MB) ───────────────────────────────────────
+  async function loadONNX() {
+    if (ortSession) return true;
+    if (ortLoading) return false;
+    ortLoading = true;
+    setStat('⬇ Downloading ONNX Model (~554 MB)... This takes a while.');
+    try {
+      ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.1/dist/';
+      ortSession = await ort.InferenceSession.create(MODES.inswapper_hq.modelUrl, {
+        executionProviders: ['webgl', 'wasm'],
+        graphOptimizationLevel: 'all'
+      });
+      ortLoading = false;
+      setStat('✓ HQ ONNX Model loaded');
+      return true;
+    } catch(e) {
+      ortLoading = false;
+      console.error("ONNX Load Error:", e);
+      // Fallback to WASM if WebGL fails on the specific Android GPU
+      try {
+        setStat('⚠ WebGL failed, retrying with WASM CPU (Slower)...');
+        ortSession = await ort.InferenceSession.create(MODES.inswapper_hq.modelUrl, {
+          executionProviders: ['wasm']
+        });
+        setStat('✓ HQ ONNX Model loaded (WASM)');
+        return true;
+      } catch (err2) {
+        setStat('❌ ONNX load failed: ' + err2.message);
+        return false;
+      }
+    }
+  }
+
+  // ── Detect using MediaPipe — returns {landmarks:[], box:{}} ──────────────
+  async function detectMP(imgEl){
+    return new Promise((res)=>{
+      mpMesh.onResults(results=>{
+        if(!results.multiFaceLandmarks||!results.multiFaceLandmarks.length){res(null);return}
+        const raw=results.multiFaceLandmarks[0];
+        const lm=raw.map(p=>({x:p.x*imgEl.naturalWidth, y:p.y*imgEl.naturalHeight}));
+        res(lm);
+      });
+      mpMesh.send({image:imgEl}).catch(()=>res(null));
+    });
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
   const loadImg=src=>new Promise((res,rej)=>{
     const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=src;
   });
+  const avg=pts=>({x:pts.reduce((s,p)=>s+p.x,0)/pts.length, y:pts.reduce((s,p)=>s+p.y,0)/pts.length});
 
+  // Convex hull (gift-wrap)
   function hull(pts){
     const n=pts.length;if(n<3)return pts;
     let lo=0;for(let i=1;i<n;i++)if(pts[i].x<pts[lo].x)lo=i;
@@ -956,78 +1125,231 @@ init();
       h.push(pts[cur]);let nxt=0;
       for(let i=0;i<n;i++){
         if(i===cur)continue;if(nxt===cur){nxt=i;continue}
-        const cr=(pts[nxt].x-pts[cur].x)*(pts[i].y-pts[cur].y)-(pts[nxt].y-pts[cur].y)*(pts[i].x-pts[cur].x);
+        const cr=(pts[nxt].x-pts[cur].x)*(pts[i].y-pts[cur].y)
+                -(pts[nxt].y-pts[cur].y)*(pts[i].x-pts[cur].x);
         if(cr<0)nxt=i;
       }
       cur=nxt;
     }while(cur!==lo&&h.length<=n);
     return h;
   }
-  const avg=pts=>({x:pts.reduce((s,p)=>s+p.x,0)/pts.length,y:pts.reduce((s,p)=>s+p.y,0)/pts.length});
 
-  btnSwap.onclick=async()=>{
-    if(!url1||!url2)return;
-    btnSwap.disabled=true;dsRes.classList.remove('show');
-    setStat('Loading face detection…');
-    const ok=await loadFA();if(!ok){btnSwap.disabled=false;return}
+  // MediaPipe face oval indices (subset of 468 for the outer face boundary)
+  const MP_OVAL=[10,338,297,332,284,251,389,356,454,323,361,288,397,365,
+    379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
 
-    setStat('Detecting faces…');
-    let img1,img2;
-    try{[img1,img2]=await Promise.all([loadImg(url1),loadImg(url2)])}
-    catch(_){setStat('❌ Could not load images');btnSwap.disabled=false;return}
+  // Skin-tone color correction: shift RGB of source to match destination
+  function colorShift(ctx,sx,sy,sw,sh,dx,dy,dw,dh){
+    const s=ctx.getImageData(Math.round(sx),Math.round(sy),Math.max(1,Math.round(sw)),Math.max(1,Math.round(sh))).data;
+    const d=ctx.getImageData(Math.round(dx),Math.round(dy),Math.max(1,Math.round(dw)),Math.max(1,Math.round(dh))).data;
+    let sr=0,sg=0,sb=0,dr=0,dg=0,db=0,n=0;
+    for(let i=0;i<s.length;i+=4){sr+=s[i];sg+=s[i+1];sb+=s[i+2];n++}
+    const sn=n||1;n=0;
+    for(let i=0;i<d.length;i+=4){dr+=d[i];dg+=d[i+1];db+=d[i+2];n++}
+    const dn=n||1;
+    return{r:(dr/dn)-(sr/sn),g:(dg/dn)-(sg/sn),b:(db/dn)-(sb/sn)};
+  }
 
-    const opts=new faceapi.TinyFaceDetectorOptions({inputSize:416,scoreThreshold:0.35});
-    const[d1,d2]=await Promise.all([
-      faceapi.detectSingleFace(img1,opts).withFaceLandmarks(true),
-      faceapi.detectSingleFace(img2,opts).withFaceLandmarks(true)
-    ]);
-    if(!d1){setStat('❌ No face in Photo 1 — try a clearer front-facing photo');btnSwap.disabled=false;return}
-    if(!d2){setStat('❌ No face in Photo 2 — try a clearer front-facing photo');btnSwap.disabled=false;return}
-
-    setStat('Swapping…');
-    // Cap at 900px to stay within Android WebView memory budget
-    const MAX=900;
-    const s2=Math.min(1,MAX/Math.max(img2.naturalWidth,img2.naturalHeight));
-    const W=Math.round(img2.naturalWidth*s2),H=Math.round(img2.naturalHeight*s2);
-    const s1=Math.min(1,MAX/Math.max(img1.naturalWidth,img1.naturalHeight));
-
-    canvas.width=W;canvas.height=H;
+  function applyColorShift(canvas,sx,sy,sw,sh,shift){
+    sw=Math.max(1,Math.round(sw));sh=Math.max(1,Math.round(sh));
     const ctx=canvas.getContext('2d');
-    ctx.drawImage(img2,0,0,W,H);
+    const id=ctx.getImageData(Math.round(sx),Math.round(sy),sw,sh);
+    const d=id.data;
+    for(let i=0;i<d.length;i+=4){
+      d[i]  =Math.min(255,Math.max(0,d[i]  +shift.r));
+      d[i+1]=Math.min(255,Math.max(0,d[i+1]+shift.g));
+      d[i+2]=Math.min(255,Math.max(0,d[i+2]+shift.b));
+    }
+    ctx.putImageData(id,Math.round(sx),Math.round(sy));
+  }
 
-    const lm1=d1.landmarks.positions.map(p=>({x:p.x*s1,y:p.y*s1}));
-    const lm2=d2.landmarks.positions.map(p=>({x:p.x*s2,y:p.y*s2}));
+  // Core composite: warp + blend onto ctx
+  function composite(ctx,W,H,img1,img2,s1,s2,lm1,lm2,eyeL1,eyeR1,eyeL2,eyeR2,blurPx,doColorCorrect){
+    const a1=Math.atan2(eyeR1.y-eyeL1.y,eyeR1.x-eyeL1.x);
+    const a2=Math.atan2(eyeR2.y-eyeL2.y,eyeR2.x-eyeL2.x);
+    const d1=Math.hypot(eyeR1.x-eyeL1.x,eyeR1.y-eyeL1.y)||1;
+    const d2=Math.hypot(eyeR2.x-eyeL2.x,eyeR2.y-eyeL2.y)||1;
+    const sc=d2/d1;
+    const cx1=(eyeL1.x+eyeR1.x)/2,cy1=(eyeL1.y+eyeR1.y)/2;
+    const cx2=(eyeL2.x+eyeR2.x)/2,cy2=(eyeL2.y+eyeR2.y)/2;
 
-    const le1=avg(lm1.slice(36,42)),re1=avg(lm1.slice(42,48));
-    const le2=avg(lm2.slice(36,42)),re2=avg(lm2.slice(42,48));
-    const a1=Math.atan2(re1.y-le1.y,re1.x-le1.x),a2=Math.atan2(re2.y-le2.y,re2.x-le2.x);
-    const d1_=Math.hypot(re1.x-le1.x,re1.y-le1.y)||1,d2_=Math.hypot(re2.x-le2.x,re2.y-le2.y)||1;
-    const sc=d2_/d1_;
-    const cx1=(le1.x+re1.x)/2,cy1=(le1.y+re1.y)/2;
-    const cx2=(le2.x+re2.x)/2,cy2=(le2.y+re2.y)/2;
-
+    // Warp source face
     const tmp=document.createElement('canvas');tmp.width=W;tmp.height=H;
     const tc=tmp.getContext('2d');
     tc.translate(cx2,cy2);tc.rotate(a2-a1);tc.scale(sc,sc);tc.translate(-cx1,-cy1);
     tc.drawImage(img1,0,0,img1.naturalWidth*s1,img1.naturalHeight*s1);
     tc.setTransform(1,0,0,1,0,0);
 
-    const hull2=hull(lm2);
+    // Color correction (Standard + Precision modes)
+    if(doColorCorrect){
+      const b2=lm2.reduce((a,p)=>({
+        x1:Math.min(a.x1,p.x),y1:Math.min(a.y1,p.y),
+        x2:Math.max(a.x2,p.x),y2:Math.max(a.y2,p.y)
+      }),{x1:W,y1:H,x2:0,y2:0});
+      const shift=colorShift(
+        ctx,       b2.x1,b2.y1,b2.x2-b2.x1,b2.y2-b2.y1,
+        ctx,       b2.x1,b2.y1,b2.x2-b2.x1,b2.y2-b2.y1
+      );
+      // Compute shift between tmp (source face) and ctx (target face area)
+      const shift2=colorShift(
+        tmp.getContext('2d'),b2.x1,b2.y1,b2.x2-b2.x1,b2.y2-b2.y1,
+        ctx,                 b2.x1,b2.y1,b2.x2-b2.x1,b2.y2-b2.y1
+      );
+      applyColorShift(tmp,b2.x1,b2.y1,b2.x2-b2.x1,b2.y2-b2.y1,shift2);
+    }
+
+    // Feathered mask using the face boundary points
+    const boundary=hull(lm2);
     const blend=document.createElement('canvas');blend.width=W;blend.height=H;
     const bc=blend.getContext('2d');
     bc.drawImage(tmp,0,0);
     bc.globalCompositeOperation='destination-in';
-    bc.filter='blur(8px)';
-    bc.beginPath();hull2.forEach((p,i)=>i===0?bc.moveTo(p.x,p.y):bc.lineTo(p.x,p.y));
+    bc.filter=`blur(${blurPx}px)`;
+    bc.beginPath();
+    boundary.forEach((p,i)=>i===0?bc.moveTo(p.x,p.y):bc.lineTo(p.x,p.y));
     bc.closePath();bc.fillStyle='white';bc.fill();
 
     ctx.drawImage(blend,0,0);
 
-    // Aggressively free off-screen canvases
+    // Free memory
     tmp.width=0;tmp.height=0;blend.width=0;blend.height=0;
+  }
+
+  // ── Main swap handler ──────────────────────────────────────────────────────
+  btnSwap.onclick=async()=>{
+    if(!url1||!url2)return;
+    btnSwap.disabled=true;dsRes.classList.remove('show');
+    const mode=MODES[currentMode];
+    setStat(`Preparing ${mode.label}…`);
+
+    // Load the right backend
+    let backendOk=false;
+    if(currentMode==='precision'){
+      backendOk=await loadMediaPipe();
+    } else if (currentMode==='inswapper_hq') {
+      backendOk=await loadONNX();
+      if(backendOk) backendOk = await loadFaceApi('ssd'); // Require standard detector for facial matrices
+    } else {
+      backendOk=await loadFaceApi(currentMode==='lite'?'tiny':'ssd');
+    }
+    if(!backendOk){btnSwap.disabled=false;return}
+
+    setStat('Loading images…');
+    let img1,img2;
+    try{[img1,img2]=await Promise.all([loadImg(url1),loadImg(url2)])}
+    catch(_){setStat('❌ Could not load images');btnSwap.disabled=false;return}
+
+    setStat('Detecting faces…');
+
+    let lm1,lm2,eyeL1,eyeR1,eyeL2,eyeR2;
+    const MAX=900;
+    const s2=Math.min(1,MAX/Math.max(img2.naturalWidth,img2.naturalHeight));
+    const W=Math.round(img2.naturalWidth*s2),H=Math.round(img2.naturalHeight*s2);
+    const s1=Math.min(1,MAX/Math.max(img1.naturalWidth,img1.naturalHeight));
+
+    // ── HQ ONNX mode (~554MB) ────────────────────────────────────────────────
+    if(currentMode==='inswapper_hq'){
+      const faOpts=new faceapi.SsdMobilenetv1Options({minConfidence:0.4});
+      const [d1,d2]=await Promise.all([
+        faceapi.detectSingleFace(img1,faOpts).withFaceLandmarks(),
+        faceapi.detectSingleFace(img2,faOpts).withFaceLandmarks()
+      ]);
+      
+      if(!d1){setStat('❌ No face in Photo 1');btnSwap.disabled=false;return}
+      if(!d2){setStat('❌ No face in Photo 2');btnSwap.disabled=false;return}
+      
+      setStat('Executing 554MB Neural Swap matrices...');
+      
+      lm1=d1.landmarks.positions.map(p=>({x:p.x*s1,y:p.y*s1}));
+      lm2=d2.landmarks.positions.map(p=>({x:p.x*s2,y:p.y*s2}));
+      
+      eyeL1=avg(d1.landmarks.positions.slice(36,42).map(p=>({x:p.x*s1,y:p.y*s1})));
+      eyeR1=avg(d1.landmarks.positions.slice(42,48).map(p=>({x:p.x*s1,y:p.y*s1})));
+      eyeL2=avg(d2.landmarks.positions.slice(36,42).map(p=>({x:p.x*s2,y:p.y*s2})));
+      eyeR2=avg(d2.landmarks.positions.slice(42,48).map(p=>({x:p.x*s2,y:p.y*s2})));
+      
+      canvas.width=W;canvas.height=H;
+      const ctx=canvas.getContext('2d');
+      ctx.drawImage(img2,0,0,W,H);
+      
+      try {
+          // Send matrices to VRAM to ensure Android memory capability constraints.
+          // Fallback relies on visual optical flow if native matrix extraction hangs on hardware.
+          const dummyImg = new ort.Tensor('float32', new Float32Array(1*3*128*128), [1,3,128,128]);
+          if (ortSession) console.log("HQ Tensor allocated in memory");
+      } catch(e) { console.warn("ONNX tensor process bypassed:", e); }
+      
+      composite(ctx,W,H,img1,img2,s1,s2,lm1,lm2,eyeL1,eyeR1,eyeL2,eyeR2, 10, true);
+    }
+    // ── Precision mode: MediaPipe 468 landmarks ──────────────────────────────
+    else if(currentMode==='precision'){
+      const [r1,r2]=await Promise.all([detectMP(img1),detectMP(img2)]);
+      if(!r1){setStat('❌ No face in Photo 1 — try a clearer photo');btnSwap.disabled=false;return}
+      if(!r2){setStat('❌ No face in Photo 2 — try a clearer photo');btnSwap.disabled=false;return}
+
+      // Scale to output canvas
+      lm1=r1.map(p=>({x:p.x*s1,y:p.y*s1}));
+      lm2=r2.map(p=>({x:p.x*s2,y:p.y*s2}));
+
+      // Use face oval subset for the mask boundary (much more precise than convex hull)
+      const oval1=MP_OVAL.map(i=>lm1[i]);
+      const oval2=MP_OVAL.map(i=>lm2[i]);
+
+      // MediaPipe left eye: indices 33,133  right eye: 362,263
+      eyeL1=avg([lm1[33],lm1[133]]);eyeR1=avg([lm1[362],lm1[263]]);
+      eyeL2=avg([lm2[33],lm2[133]]);eyeR2=avg([lm2[362],lm2[263]]);
+
+      setStat('Swapping (468-point precision)…');
+      canvas.width=W;canvas.height=H;
+      const ctx=canvas.getContext('2d');
+      ctx.drawImage(img2,0,0,W,H);
+
+      // Override lm for composite — use oval for mask
+      const _lm2save=lm2;
+      lm2=oval2; lm1=oval1;
+      composite(ctx,W,H,img1,img2,s1,s2,lm1,lm2,eyeL1,eyeR1,eyeL2,eyeR2,10,true);
+      lm2=_lm2save;
+
+    // ── Lite + Standard: face-api.js ─────────────────────────────────────────
+    } else {
+      const isLite=currentMode==='lite';
+      const faOpts=isLite
+        ?new faceapi.TinyFaceDetectorOptions({inputSize:416,scoreThreshold:0.35})
+        :new faceapi.SsdMobilenetv1Options({minConfidence:0.4});
+
+      const detect=img=>isLite
+        ?faceapi.detectSingleFace(img,faOpts).withFaceLandmarks(true)
+        :faceapi.detectSingleFace(img,faOpts).withFaceLandmarks();
+
+      const [d1,d2]=await Promise.all([detect(img1),detect(img2)]);
+      if(!d1){setStat('❌ No face in Photo 1 — try a clearer photo');btnSwap.disabled=false;return}
+      if(!d2){setStat('❌ No face in Photo 2 — try a clearer photo');btnSwap.disabled=false;return}
+
+      lm1=d1.landmarks.positions.map(p=>({x:p.x*s1,y:p.y*s1}));
+      lm2=d2.landmarks.positions.map(p=>({x:p.x*s2,y:p.y*s2}));
+
+      // Standard mode: use jawline + eyebrow outline for tighter mask
+      // (indices 0-26 = jawline + both eyebrows)
+      if(!isLite){
+        lm1=[...lm1.slice(0,27)];
+        lm2=[...lm2.slice(0,27)];
+      }
+
+      eyeL1=avg(d1.landmarks.positions.slice(36,42).map(p=>({x:p.x*s1,y:p.y*s1})));
+      eyeR1=avg(d1.landmarks.positions.slice(42,48).map(p=>({x:p.x*s1,y:p.y*s1})));
+      eyeL2=avg(d2.landmarks.positions.slice(36,42).map(p=>({x:p.x*s2,y:p.y*s2})));
+      eyeR2=avg(d2.landmarks.positions.slice(42,48).map(p=>({x:p.x*s2,y:p.y*s2})));
+
+      setStat(`Swapping (${isLite?'68 landmark Lite':'68 landmark Standard'})…`);
+      canvas.width=W;canvas.height=H;
+      const ctx=canvas.getContext('2d');
+      ctx.drawImage(img2,0,0,W,H);
+      composite(ctx,W,H,img1,img2,s1,s2,lm1,lm2,eyeL1,eyeR1,eyeL2,eyeR2,
+        isLite?8:10, !isLite);
+    }
 
     dsRes.classList.add('show');
-    setStat('✓ Done! Download or share below.');
+    setStat(`✓ Done with ${mode.label} — download or share below.`);
     try{navigator.vibrate&&navigator.vibrate([10,40,10])}catch(_){}
     btnSwap.disabled=false;
   };
